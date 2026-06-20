@@ -7,20 +7,16 @@ const {
 const { 
     joinVoiceChannel, createAudioPlayer, createAudioResource, 
     AudioPlayerStatus, VoiceConnectionStatus, entersState, 
-    NoSubscriberBehavior, StreamType, generateDependencyReport
+    NoSubscriberBehavior
 } = require('@discordjs/voice');
 const http = require('http');
-const fetch = require('node-fetch'); // مهم جداً لسحب الصوت وتجاوز الحماية
 
-// ==========================================
-// 1. الإعدادات (Config)
-// ==========================================
 const CONFIG = {
     GUILD_ID: process.env.GUILD_ID,
     VOICE_CHANNEL_ID: process.env.VOICE_CHANNEL_ID,
     LOG_CHANNEL_ID: process.env.LOG_CHANNEL_ID,
     OWNER_ROLE_ID: process.env.OWNER_ROLE_ID,
-    DEFAULT_SERVER: 'https://server6.mp3quran.net/3siri/', // إبراهيم الأصيري
+    DEFAULT_SERVER: 'https://server6.mp3quran.net/3siri/', 
     RECITER_NAME: 'إبراهيم الأصيري'
 };
 
@@ -35,43 +31,30 @@ const STATE = {
 let connection = null;
 let player = null;
 
-// ==========================================
-// 2. خادم الويب
-// ==========================================
 http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
-    res.end('بوت القرآن الكريم الشامل يعمل بنجاح!');
+    res.end('Bot is running!');
 }).listen(process.env.PORT || 3000);
 
-// ==========================================
-// 3. تهيئة العميل
-// ==========================================
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
     makeCache: Options.cacheWithLimits({
-        MessageManager: 0, PresenceManager: 0, ReactionManager: 0,
-        ThreadManager: 0 
+        MessageManager: 0, PresenceManager: 0, ReactionManager: 0, ThreadManager: 0 
     }),
 });
 
-// ==========================================
-// 4. نظام السجلات الذكي (Smart Logger)
-// ==========================================
 async function logMessage(message, type = 'info') {
     console.log(`[${type.toUpperCase()}] ${message}`);
     if (!CONFIG.LOG_CHANNEL_ID) return;
     try {
         const channel = client.channels.cache.get(CONFIG.LOG_CHANNEL_ID);
         if (channel && channel.isTextBased()) {
-            const emoji = type === 'error' ? '❌' : type === 'warn' ? '⚠️' : type === 'debug' ? '🔍' : 'ℹ️';
+            const emoji = type === 'error' ? '❌' : 'ℹ️';
             await channel.send(`${emoji} **[سجل البوت]:** ${message}`).catch(() => {});
         }
     } catch (e) {}
 }
 
-// ==========================================
-// 5. نظام الصوت والاتصال
-// ==========================================
 async function connectToVoice() {
     try {
         const guild = client.guilds.cache.get(CONFIG.GUILD_ID);
@@ -91,33 +74,16 @@ async function connectToVoice() {
                 behaviors: { noSubscriber: NoSubscriberBehavior.Play }
             });
 
-            // نظام تتبع ذكي لحالة المشغل (يكشف سبب التخطي السريع)
-            player.on('stateChange', (oldState, newState) => {
-                if (newState.status === AudioPlayerStatus.Idle && oldState.status === AudioPlayerStatus.Playing) {
-                    const playTime = oldState.playbackDuration;
-                    
-                    // إذا توقف الصوت في أقل من ثانية، فهناك مشكلة في الرابط أو فك التشفير
-                    if (playTime < 1000) {
-                        logMessage(`توقف الصوت بشكل غير طبيعي بعد ${playTime}ms فقط! السيرفر يرفض البث.`, 'warn');
-                        STATE.isPlaying = false; // إيقاف البوت لمنع حلقة التخطي اللانهائية
-                        updateControlPanel();
-                        return;
-                    }
-
-                    // إذا انتهت السورة بشكل طبيعي
-                    if (STATE.isPlaying && STATE.membersCount > 0) {
-                        STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
-                        setTimeout(() => {
-                            if (STATE.isPlaying) playCurrentSurah();
-                        }, 2000);
-                    }
+            player.on(AudioPlayerStatus.Idle, () => {
+                if (STATE.isPlaying && STATE.membersCount > 0) {
+                    STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
+                    setTimeout(() => { if (STATE.isPlaying) playCurrentSurah(); }, 2000);
                 }
             });
 
             player.on('error', error => {
-                logMessage(`خطأ داخلي في مشغل الصوت: ${error.message}`, 'error');
-                STATE.isPlaying = false;
-                updateControlPanel();
+                logMessage(`خطأ في الصوت: ${error.message}`, 'error');
+                setTimeout(() => { if (STATE.isPlaying) playCurrentSurah(); }, 5000);
             });
         }
 
@@ -135,33 +101,27 @@ async function connectToVoice() {
             }
         });
 
-        logMessage('✅ البوت متصل بالروم الصوتي وجاهز للعمل.');
+        logMessage('✅ البوت متصل بالروم الصوتي.');
         checkChannelMembers(voiceChannel);
 
     } catch (error) {
-        logMessage(`فشل الاتصال بالروم: ${error.message}`, 'error');
+        logMessage(`فشل الاتصال: ${error.message}`, 'error');
         setTimeout(connectToVoice, 10000);
     }
 }
 
-// ==========================================
-// 6. النظام الاقتصادي اللحظي
-// ==========================================
 function checkChannelMembers(channel) {
     if (!channel) return;
-    
-    const members = channel.members.filter(m => !m.user.bot);
-    const count = members.size;
+    const count = channel.members.filter(m => !m.user.bot).size;
 
     if (count !== STATE.membersCount) {
         STATE.membersCount = count;
-        
         if (count > 0 && !STATE.isPlaying) {
             logMessage(`👤 تم رصد مستمعين (${count}) - جاري بدء التلاوة...`);
             STATE.isPlaying = true;
             playCurrentSurah();
         } else if (count === 0 && STATE.isPlaying) {
-            logMessage(`🚫 الروم فارغ - إيقاف التلاوة لتوفير الموارد.`);
+            logMessage(`🚫 الروم فارغ - إيقاف التلاوة.`);
             STATE.isPlaying = false; 
             if (player) player.stop(); 
             updateControlPanel();
@@ -179,57 +139,26 @@ client.on('voiceStateUpdate', (oldState, newState) => {
     }
 });
 
-// ==========================================
-// 7. تشغيل السورة (مع نظام تجاوز الحماية والفحص)
-// ==========================================
 async function playCurrentSurah() {
     if (!player || !STATE.isPlaying) return;
     try {
         const paddedSurah = String(STATE.currentSurah).padStart(3, '0');
         const audioURL = `${CONFIG.DEFAULT_SERVER}${paddedSurah}.mp3`;
         
-        logMessage(`جاري فحص الرابط: ${audioURL}`, 'debug');
-
-        // التنكر كمتصفح حقيقي لسحب الصوت وتجاوز حماية السيرفر
-        const response = await fetch(audioURL, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                'Accept': 'audio/mpeg, audio/*;q=0.9, */*;q=0.8'
-            }
-        });
-
-        if (!response.ok) {
-            throw new Error(`السيرفر رفض الاتصال (HTTP ${response.status} ${response.statusText})`);
-        }
-
-        // تحويل البث المسحوب إلى مورد صوتي
-        const resource = createAudioResource(response.body, { 
-            inputType: StreamType.Arbitrary, 
-            inlineVolume: true 
-        });
-        
+        // الطريقة المباشرة والأكثر ضماناً لعمل الصوت في ديسكورد
+        const resource = createAudioResource(audioURL, { inlineVolume: true });
         resource.volume.setVolume(0.6);
         
-        // تتبع أخطاء البث المباشر (FFMPEG)
-        resource.playStream.on('error', error => {
-            logMessage(`خطأ في فك تشفير الصوت (FFMPEG): ${error.message}`, 'error');
-        });
-
         player.play(resource);
         STATE.isPaused = false;
         
-        logMessage(`▶️ جاري تلاوة سورة رقم ${STATE.currentSurah} بنجاح.`);
+        logMessage(`▶️ جاري تلاوة سورة رقم ${STATE.currentSurah}`);
         updateControlPanel();
     } catch (error) {
         logMessage(`فشل تشغيل السورة: ${error.message}`, 'error');
-        STATE.isPlaying = false; // إيقاف البوت لمنع التكرار
-        updateControlPanel();
     }
 }
 
-// ==========================================
-// 8. لوحة التحكم (Setup Panel)
-// ==========================================
 function buildPanel() {
     const embed = new EmbedBuilder()
         .setTitle('📖 بوت إذاعة القرآن الكريم')
@@ -238,8 +167,7 @@ function buildPanel() {
             { name: '🎙️ القارئ', value: CONFIG.RECITER_NAME, inline: true },
             { name: '🔢 السورة الحالية', value: `${STATE.currentSurah} / 114`, inline: true },
             { name: '▶️ الحالة', value: STATE.isPaused ? '⏸️ متوقف مؤقتاً' : STATE.isPlaying ? '🔴 يبث الآن' : '🟡 وضع الاستعداد', inline: true },
-            { name: '👥 المستمعون', value: `${STATE.membersCount}`, inline: true },
-            { name: '⚡ الوضع الاقتصادي', value: 'مفعل (يعمل تلقائياً عند دخولك للروم)', inline: false }
+            { name: '👥 المستمعون', value: `${STATE.membersCount}`, inline: true }
         )
         .setFooter({ text: 'لوحة التحكم الذكية' })
         .setTimestamp();
@@ -255,18 +183,12 @@ function buildPanel() {
 
 async function updateControlPanel() {
     if (!STATE.controlMessage) return;
-    try {
-        await STATE.controlMessage.edit(buildPanel());
-    } catch (e) {}
+    try { await STATE.controlMessage.edit(buildPanel()); } catch (e) {}
 }
 
-// ==========================================
-// 9. تسجيل الأوامر والتفاعلات
-// ==========================================
 async function registerCommands() {
     const commands = [
-        new SlashCommandBuilder().setName('setup').setDescription('إنشاء لوحة التحكم (للمالك فقط)'),
-        new SlashCommandBuilder().setName('status').setDescription('حالة البوت')
+        new SlashCommandBuilder().setName('setup').setDescription('إنشاء لوحة التحكم (للمالك فقط)')
     ].map(c => c.toJSON());
 
     const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -277,52 +199,32 @@ async function registerCommands() {
 client.on('interactionCreate', async interaction => {
     const isOwner = interaction.member.roles.cache.has(CONFIG.OWNER_ROLE_ID) || interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
-    if (interaction.isChatInputCommand()) {
-        if (interaction.commandName === 'setup') {
-            if (!isOwner) return interaction.reply({ content: '⛔ هذه اللوحة للمالك أو الإدارة فقط!', ephemeral: true });
-            
-            const message = await interaction.reply({ ...buildPanel(), fetchReply: true });
-            STATE.controlMessage = message;
-            logMessage(`تم إنشاء لوحة التحكم بنجاح.`);
-        } 
-        else if (interaction.commandName === 'status') {
-            await interaction.reply({ content: `الاتصال: ${connection ? '🟢' : '🔴'} | المستمعون: ${STATE.membersCount}`, ephemeral: true });
-        }
+    if (interaction.isChatInputCommand() && interaction.commandName === 'setup') {
+        if (!isOwner) return interaction.reply({ content: '⛔ للمالك فقط!', ephemeral: true });
+        const message = await interaction.reply({ ...buildPanel(), fetchReply: true });
+        STATE.controlMessage = message;
     } 
     else if (interaction.isButton()) {
-        if (!isOwner) return interaction.reply({ content: '⛔ لا تملك صلاحية استخدام الأزرار!', ephemeral: true });
+        if (!isOwner) return interaction.reply({ content: '⛔ للمالك فقط!', ephemeral: true });
         await interaction.deferUpdate();
 
         if (interaction.customId === 'btn_next') {
             STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
             playCurrentSurah();
-        } 
-        else if (interaction.customId === 'btn_prev') {
+        } else if (interaction.customId === 'btn_prev') {
             STATE.currentSurah = STATE.currentSurah <= 1 ? 114 : STATE.currentSurah - 1;
             playCurrentSurah();
-        } 
-        else if (interaction.customId === 'btn_pause') {
-            if (STATE.isPaused) {
-                player.unpause();
-                STATE.isPaused = false;
-            } else {
-                player.pause();
-                STATE.isPaused = true;
-            }
+        } else if (interaction.customId === 'btn_pause') {
+            STATE.isPaused ? player.unpause() : player.pause();
+            STATE.isPaused = !STATE.isPaused;
             updateControlPanel();
         }
     }
 });
 
-// ==========================================
-// 10. تشغيل البوت
-// ==========================================
 client.once('ready', async () => {
-    console.log(`[Client] تم الدخول باسم: ${client.user.tag}`);
+    console.log(`[Client] Logged in as ${client.user.tag}`);
     client.user.setActivity('القرآن الكريم 🎧', { type: ActivityType.Listening });
-    
-    console.log(generateDependencyReport()); // طباعة تقرير المكتبات للتأكد من سلامة FFMPEG
-
     await registerCommands();
     await connectToVoice(); 
 });
