@@ -1,14 +1,13 @@
-FROM node:18-slim
+FROM node:18-bullseye
 
-# تثبيت المترجمات الأساسية وأدوات الصوت
 RUN apt-get update && \
-    apt-get install -y ffmpeg build-essential python3 && \
+    apt-get install -y ffmpeg libsodium-dev build-essential python3 && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install --only=production
+RUN npm install
 
 COPY . .
 
