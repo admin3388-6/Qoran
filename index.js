@@ -7,9 +7,10 @@ const {
 const { 
     joinVoiceChannel, createAudioPlayer, createAudioResource, 
     AudioPlayerStatus, VoiceConnectionStatus, entersState, 
-    NoSubscriberBehavior
+    NoSubscriberBehavior, StreamType // 👈 إضافة StreamType
 } = require('@discordjs/voice');
 const http = require('http');
+const https = require('https'); // 👈 الاعتماد على المكتبة الأصلية للنظام
 
 const CONFIG = {
     GUILD_ID: process.env.GUILD_ID,
@@ -131,6 +132,54 @@ function checkChannelMembers(channel) {
     }
 }
 
+// ==========================================
+// هندسة سحب الصوت المتقدمة عبر https الأساسية
+// ==========================================
+async function playCurrentSurah() {
+    if (!player || !STATE.isPlaying) return;
+    
+    const paddedSurah = String(STATE.currentSurah).padStart(3, '0');
+    const audioURL = `${CONFIG.DEFAULT_SERVER}${paddedSurah}.mp3`;
+    
+    // سحب الصوت بتدفق نقي مع التنكر لتجاوز حظر السيرفر
+    https.get(audioURL, {
+        headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+            'Accept': 'audio/mpeg'
+        }
+    }, (res) => {
+        // التحقق من أن السيرفر وافق على إرسال الملف
+        if (res.statusCode !== 200) {
+            logMessage(`السيرفر رفض الطلب (كود ${res.statusCode}) - جاري تخطي السورة`, 'error');
+            STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
+            setTimeout(() => { if (STATE.isPlaying) playCurrentSurah(); }, 5000);
+            return;
+        }
+
+        try {
+            // تحويل التدفق النقي إلى مصدر صوتي متوافق 100% مع ديسكورد
+            const resource = createAudioResource(res, { 
+                inputType: StreamType.Arbitrary, // إجبار المعالج على قبول التدفق
+                inlineVolume: true 
+            });
+            resource.volume.setVolume(0.6);
+            
+            player.play(resource);
+            STATE.isPaused = false;
+            
+            logMessage(`▶️ جاري تلاوة سورة رقم ${STATE.currentSurah}`);
+            updateControlPanel();
+        } catch (error) {
+            logMessage(`فشل تمرير الصوت للمشغل: ${error.message}`, 'error');
+        }
+
+    }).on('error', (error) => {
+        logMessage(`فشل الاتصال بخادم الصوتيات: ${error.message}`, 'error');
+        STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
+        setTimeout(() => { if (STATE.isPlaying) playCurrentSurah(); }, 5000);
+    });
+}
+
 client.on('voiceStateUpdate', (oldState, newState) => {
     if (oldState.channelId === CONFIG.VOICE_CHANNEL_ID || newState.channelId === CONFIG.VOICE_CHANNEL_ID) {
         const guild = client.guilds.cache.get(CONFIG.GUILD_ID);
@@ -138,34 +187,6 @@ client.on('voiceStateUpdate', (oldState, newState) => {
         if (voiceChannel) checkChannelMembers(voiceChannel);
     }
 });
-
-// ==========================================
-// التعديل: إرسال الرابط مباشرة ليتم معالجته عبر ffmpeg
-// ==========================================
-async function playCurrentSurah() {
-    if (!player || !STATE.isPlaying) return;
-    try {
-        const paddedSurah = String(STATE.currentSurah).padStart(3, '0');
-        const audioURL = `${CONFIG.DEFAULT_SERVER}${paddedSurah}.mp3`;
-        
-        // تمرير الرابط المباشر لمكتبة ديسكورد ليتولى ffmpeg جلب الصوت ومعالجته بكفاءة
-        const resource = createAudioResource(audioURL, { 
-            inlineVolume: true 
-        });
-        resource.volume.setVolume(0.6);
-        
-        player.play(resource);
-        STATE.isPaused = false;
-        
-        logMessage(`▶️ جاري تلاوة سورة رقم ${STATE.currentSurah}`);
-        updateControlPanel();
-    } catch (error) {
-        logMessage(`فشل تشغيل السورة: ${error.message}`, 'error');
-        // إذا فشلت السورة، ننتقل للتي بعدها بعد 5 ثواني
-        STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
-        setTimeout(() => { if (STATE.isPlaying) playCurrentSurah(); }, 5000);
-    }
-}
 
 function buildPanel() {
     const embed = new EmbedBuilder()
