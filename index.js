@@ -19,19 +19,17 @@ const CONFIG = {
     VOICE_CHANNEL_ID: process.env.VOICE_CHANNEL_ID,
     LOG_CHANNEL_ID: process.env.LOG_CHANNEL_ID,
     OWNER_ROLE_ID: process.env.OWNER_ROLE_ID,
-    API_BASE: 'https://mp3quran.net/api/v3',
     DEFAULT_SERVER: 'https://server6.mp3quran.net/3siri/', // إبراهيم الأصيري
     RECITER_NAME: 'إبراهيم الأصيري',
     CHECK_INTERVAL: 10000 // فحص الروم كل 10 ثواني
 };
 
-// حالة البوت (State)
 const STATE = {
     isPlaying: false,
     isPaused: false,
     currentSurah: 1,
     membersCount: 0,
-    controlMessage: null // لحفظ رسالة لوحة التحكم
+    controlMessage: null 
 };
 
 let connection = null;
@@ -73,7 +71,7 @@ async function logMessage(message, type = 'info') {
 }
 
 // ==========================================
-// 5. نظام جلب السور (Quran API)
+// 5. نظام جلب السور
 // ==========================================
 function getAudioURL(surahNumber) {
     const paddedSurah = String(surahNumber).padStart(3, '0');
@@ -89,6 +87,7 @@ async function connectAndMonitor() {
         const voiceChannel = guild?.channels.cache.get(CONFIG.VOICE_CHANNEL_ID);
         if (!voiceChannel) return logMessage('لم يتم العثور على الروم الصوتي!', 'error');
 
+        // إنشاء الاتصال
         connection = joinVoiceChannel({
             channelId: voiceChannel.id,
             guildId: guild.id,
@@ -97,25 +96,48 @@ async function connectAndMonitor() {
             selfMute: false
         });
 
-        await entersState(connection, VoiceConnectionStatus.Ready, 20000);
+        // إعداد المشغل الصوتي فوراً لتجنب أي تأخير
+        if (!player) {
+            player = createAudioPlayer({
+                behaviors: { noSubscriber: NoSubscriberBehavior.Play }
+            });
 
-        player = createAudioPlayer({
-            behaviors: { noSubscriber: NoSubscriberBehavior.Play }
-        });
+            player.on(AudioPlayerStatus.Idle, () => {
+                if (STATE.isPlaying && STATE.membersCount > 0) {
+                    STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
+                    playCurrentSurah();
+                }
+            });
+
+            player.on('error', error => {
+                logMessage(`خطأ في الصوت: ${error.message}`, 'error');
+                setTimeout(playCurrentSurah, 5000);
+            });
+        }
 
         connection.subscribe(player);
 
-        player.on(AudioPlayerStatus.Idle, () => {
-            if (STATE.isPlaying && STATE.membersCount > 0) {
-                // الانتقال للسورة التالية تلقائياً
-                STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
-                playCurrentSurah();
-            }
-        });
+        // محاولة الاتصال مع تجاهل خطأ التأخير (Abort Error Bypass)
+        try {
+            await entersState(connection, VoiceConnectionStatus.Ready, 30000);
+            logMessage('✅ تم الاتصال بخوادم الصوت بنجاح.');
+        } catch (error) {
+            logMessage(`⏳ تأخر الاتصال بخوادم ديسكورد، سيتم المحاولة في الخلفية...`, 'warn');
+            // لن نقوم بإيقاف الكود هنا، ديسكورد سيستمر بالمحاولة تلقائياً
+        }
 
-        player.on('error', error => {
-            logMessage(`خطأ في الصوت: ${error.message}`, 'error');
-            setTimeout(playCurrentSurah, 5000);
+        // معالجة الانقطاع المفاجئ
+        connection.on(VoiceConnectionStatus.Disconnected, async () => {
+            logMessage('⚠️ انقطع الاتصال، جاري إعادة المحاولة...', 'warn');
+            try {
+                await Promise.race([
+                    entersState(connection, VoiceConnectionStatus.Signalling, 5000),
+                    entersState(connection, VoiceConnectionStatus.Connecting, 5000),
+                ]);
+            } catch (e) {
+                if (connection) connection.destroy();
+                setTimeout(connectAndMonitor, 5000); // إعادة تشغيل كاملة
+            }
         });
 
         logMessage('✅ البوت متصل بالروم وفي وضع الاستعداد (0% استهلاك).');
@@ -123,16 +145,16 @@ async function connectAndMonitor() {
         // بدء المراقبة الاقتصادية
         if (checkInterval) clearInterval(checkInterval);
         checkInterval = setInterval(() => checkVoiceChannel(voiceChannel), CONFIG.CHECK_INTERVAL);
-        checkVoiceChannel(voiceChannel); // فحص فوري
+        checkVoiceChannel(voiceChannel); 
 
     } catch (error) {
         logMessage(`فشل الاتصال: ${error.message}`, 'error');
+        setTimeout(connectAndMonitor, 10000); // إعادة المحاولة بعد 10 ثواني
     }
 }
 
 async function checkVoiceChannel(channel) {
     try {
-        // حساب عدد الأعضاء في الروم (بدون البوتات)
         const members = channel.members.filter(m => !m.user.bot);
         const count = members.size;
 
@@ -201,12 +223,12 @@ async function updateControlPanel() {
     try {
         await STATE.controlMessage.edit(buildPanel());
     } catch (e) {
-        STATE.controlMessage = null; // الرسالة حُذفت
+        STATE.controlMessage = null; 
     }
 }
 
 // ==========================================
-// 8. تسجيل الأوامر والتفاعلات (Interactions)
+// 8. تسجيل الأوامر والتفاعلات
 // ==========================================
 async function registerCommands() {
     const commands = [
@@ -220,7 +242,6 @@ async function registerCommands() {
 }
 
 client.on('interactionCreate', async interaction => {
-    // التحقق من صلاحيات المالك للأزرار وأمر setup
     const isOwner = interaction.member.roles.cache.has(CONFIG.OWNER_ROLE_ID) || interaction.member.permissions.has(PermissionsBitField.Flags.Administrator);
 
     if (interaction.isChatInputCommand()) {
@@ -268,7 +289,7 @@ client.once('ready', async () => {
     client.user.setActivity('القرآن الكريم 🎧', { type: ActivityType.Listening });
 
     await registerCommands();
-    await connectAndMonitor(); // الاتصال وبدء المراقبة الاقتصادية
+    await connectAndMonitor(); 
 });
 
 process.on('unhandledRejection', e => console.error(e));
