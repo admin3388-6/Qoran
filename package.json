@@ -1,7 +1,7 @@
 {
   "name": "quran-radio-bot",
   "version": "1.0.0",
-  "description": "بوت إذاعة القرآن الكريم - نسخة شاملة واقتصادية",
+  "description": "بوت القرآن الكريم - النسخة النهائية المضمونة",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
