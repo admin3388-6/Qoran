@@ -20,8 +20,7 @@ const CONFIG = {
     LOG_CHANNEL_ID: process.env.LOG_CHANNEL_ID,
     OWNER_ROLE_ID: process.env.OWNER_ROLE_ID,
     DEFAULT_SERVER: 'https://server6.mp3quran.net/3siri/', // إبراهيم الأصيري
-    RECITER_NAME: 'إبراهيم الأصيري',
-    CHECK_INTERVAL: 10000 // فحص الروم كل 10 ثواني
+    RECITER_NAME: 'إبراهيم الأصيري'
 };
 
 const STATE = {
@@ -34,7 +33,6 @@ const STATE = {
 
 let connection = null;
 let player = null;
-let checkInterval = null;
 
 // ==========================================
 // 2. خادم الويب (Render Port Bypass)
@@ -45,13 +43,13 @@ http.createServer((req, res) => {
 }).listen(process.env.PORT || 3000);
 
 // ==========================================
-// 3. تهيئة العميل (Client)
+// 3. تهيئة العميل (تم إصلاح مشكلة الذاكرة ليرى الأعضاء)
 // ==========================================
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
     makeCache: Options.cacheWithLimits({
         MessageManager: 0, PresenceManager: 0, ReactionManager: 0,
-        ThreadManager: 0, UserManager: 0, GuildMemberManager: 0,    
+        ThreadManager: 0 // تم إزالة تقييد الأعضاء لكي يتمكن البوت من رؤيتك
     }),
 });
 
@@ -79,9 +77,9 @@ function getAudioURL(surahNumber) {
 }
 
 // ==========================================
-// 6. نظام الصوت والاقتصاد (Voice & Economic Mode)
+// 6. نظام الصوت والاتصال
 // ==========================================
-async function connectAndMonitor() {
+async function connectToVoice() {
     try {
         const guild = client.guilds.cache.get(CONFIG.GUILD_ID);
         const voiceChannel = guild?.channels.cache.get(CONFIG.VOICE_CHANNEL_ID);
@@ -96,7 +94,6 @@ async function connectAndMonitor() {
             selfMute: false
         });
 
-        // إعداد المشغل الصوتي فوراً لتجنب أي تأخير
         if (!player) {
             player = createAudioPlayer({
                 behaviors: { noSubscriber: NoSubscriberBehavior.Play }
@@ -117,18 +114,8 @@ async function connectAndMonitor() {
 
         connection.subscribe(player);
 
-        // محاولة الاتصال مع تجاهل خطأ التأخير (Abort Error Bypass)
-        try {
-            await entersState(connection, VoiceConnectionStatus.Ready, 30000);
-            logMessage('✅ تم الاتصال بخوادم الصوت بنجاح.');
-        } catch (error) {
-            logMessage(`⏳ تأخر الاتصال بخوادم ديسكورد، سيتم المحاولة في الخلفية...`, 'warn');
-            // لن نقوم بإيقاف الكود هنا، ديسكورد سيستمر بالمحاولة تلقائياً
-        }
-
-        // معالجة الانقطاع المفاجئ
+        // معالجة الانقطاع
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
-            logMessage('⚠️ انقطع الاتصال، جاري إعادة المحاولة...', 'warn');
             try {
                 await Promise.race([
                     entersState(connection, VoiceConnectionStatus.Signalling, 5000),
@@ -136,44 +123,59 @@ async function connectAndMonitor() {
                 ]);
             } catch (e) {
                 if (connection) connection.destroy();
-                setTimeout(connectAndMonitor, 5000); // إعادة تشغيل كاملة
+                setTimeout(connectToVoice, 5000);
             }
         });
 
-        logMessage('✅ البوت متصل بالروم وفي وضع الاستعداد (0% استهلاك).');
+        logMessage('✅ البوت متصل بالروم الصوتي وجاهز للعمل.');
         
-        // بدء المراقبة الاقتصادية
-        if (checkInterval) clearInterval(checkInterval);
-        checkInterval = setInterval(() => checkVoiceChannel(voiceChannel), CONFIG.CHECK_INTERVAL);
-        checkVoiceChannel(voiceChannel); 
+        // فحص الروم فور الدخول لمعرفة إذا كان هناك أشخاص متواجدين مسبقاً
+        checkChannelMembers(voiceChannel);
 
     } catch (error) {
         logMessage(`فشل الاتصال: ${error.message}`, 'error');
-        setTimeout(connectAndMonitor, 10000); // إعادة المحاولة بعد 10 ثواني
+        setTimeout(connectToVoice, 10000);
     }
 }
 
-async function checkVoiceChannel(channel) {
-    try {
-        const members = channel.members.filter(m => !m.user.bot);
-        const count = members.size;
+// ==========================================
+// 7. النظام الاقتصادي اللحظي (بدون تأخير)
+// ==========================================
+function checkChannelMembers(channel) {
+    if (!channel) return;
+    
+    // حساب الأعضاء الحقيقيين (بدون البوتات)
+    const members = channel.members.filter(m => !m.user.bot);
+    const count = members.size;
 
-        if (count !== STATE.membersCount) {
-            STATE.membersCount = count;
-            
-            if (count > 0 && !STATE.isPlaying) {
-                logMessage(`👤 دخل عضو للروم - جاري بدء التلاوة...`);
-                STATE.isPlaying = true;
-                playCurrentSurah();
-            } else if (count === 0 && STATE.isPlaying) {
-                logMessage(`🚫 خرج الجميع - إيقاف التلاوة لتوفير الموارد.`);
-                player.stop();
-                STATE.isPlaying = false;
-                updateControlPanel();
-            }
+    if (count !== STATE.membersCount) {
+        STATE.membersCount = count;
+        
+        if (count > 0 && !STATE.isPlaying) {
+            logMessage(`👤 تم رصد مستمعين (${count}) - جاري بدء التلاوة فوراً...`);
+            STATE.isPlaying = true;
+            playCurrentSurah();
+        } else if (count === 0 && STATE.isPlaying) {
+            logMessage(`🚫 الروم فارغ - إيقاف التلاوة لتوفير الموارد.`);
+            player.stop();
+            STATE.isPlaying = false;
+            updateControlPanel();
+        } else {
+            // تحديث العداد فقط في اللوحة
+            updateControlPanel();
         }
-    } catch (e) {}
+    }
 }
+
+// مراقبة الدخول والخروج بشكل لحظي
+client.on('voiceStateUpdate', (oldState, newState) => {
+    // التحقق مما إذا كان التحديث يخص الروم الخاص بنا
+    if (oldState.channelId === CONFIG.VOICE_CHANNEL_ID || newState.channelId === CONFIG.VOICE_CHANNEL_ID) {
+        const guild = client.guilds.cache.get(CONFIG.GUILD_ID);
+        const voiceChannel = guild?.channels.cache.get(CONFIG.VOICE_CHANNEL_ID);
+        if (voiceChannel) checkChannelMembers(voiceChannel);
+    }
+});
 
 async function playCurrentSurah() {
     if (!player || !STATE.isPlaying) return;
@@ -193,7 +195,7 @@ async function playCurrentSurah() {
 }
 
 // ==========================================
-// 7. لوحة التحكم (Setup Panel)
+// 8. لوحة التحكم (Setup Panel)
 // ==========================================
 function buildPanel() {
     const embed = new EmbedBuilder()
@@ -204,7 +206,7 @@ function buildPanel() {
             { name: '🔢 السورة الحالية', value: `${STATE.currentSurah} / 114`, inline: true },
             { name: '▶️ الحالة', value: STATE.isPaused ? '⏸️ متوقف مؤقتاً' : STATE.isPlaying ? '🔴 يبث الآن' : '🟡 وضع الاستعداد', inline: true },
             { name: '👥 المستمعون', value: `${STATE.membersCount}`, inline: true },
-            { name: '⚡ الوضع الاقتصادي', value: 'مفعل (يعمل عند دخول الأعضاء فقط)', inline: false }
+            { name: '⚡ الوضع الاقتصادي', value: 'مفعل (يعمل تلقائياً عند دخولك للروم)', inline: false }
         )
         .setFooter({ text: 'لوحة التحكم الذكية' })
         .setTimestamp();
@@ -228,7 +230,7 @@ async function updateControlPanel() {
 }
 
 // ==========================================
-// 8. تسجيل الأوامر والتفاعلات
+// 9. تسجيل الأوامر والتفاعلات
 // ==========================================
 async function registerCommands() {
     const commands = [
@@ -250,7 +252,7 @@ client.on('interactionCreate', async interaction => {
             
             const message = await interaction.reply({ ...buildPanel(), fetchReply: true });
             STATE.controlMessage = message;
-            logMessage(`تم إنشاء لوحة التحكم بواسطة ${interaction.user.tag}`);
+            logMessage(`تم إنشاء لوحة التحكم بنجاح.`);
         } 
         else if (interaction.commandName === 'status') {
             await interaction.reply({ content: `الاتصال: ${connection ? '🟢' : '🔴'} | المستمعون: ${STATE.membersCount}`, ephemeral: true });
@@ -282,14 +284,14 @@ client.on('interactionCreate', async interaction => {
 });
 
 // ==========================================
-// 9. تشغيل البوت
+// 10. تشغيل البوت
 // ==========================================
 client.once('ready', async () => {
     console.log(`[Client] تم الدخول باسم: ${client.user.tag}`);
     client.user.setActivity('القرآن الكريم 🎧', { type: ActivityType.Listening });
 
     await registerCommands();
-    await connectAndMonitor(); 
+    await connectToVoice(); 
 });
 
 process.on('unhandledRejection', e => console.error(e));
