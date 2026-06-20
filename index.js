@@ -7,9 +7,10 @@ const {
 const { 
     joinVoiceChannel, createAudioPlayer, createAudioResource, 
     AudioPlayerStatus, VoiceConnectionStatus, entersState, 
-    NoSubscriberBehavior
+    NoSubscriberBehavior, StreamType
 } = require('@discordjs/voice');
 const http = require('http');
+const fetch = require('node-fetch'); // المكتبة السحرية لسحب الصوت
 
 const CONFIG = {
     GUILD_ID: process.env.GUILD_ID,
@@ -139,14 +140,30 @@ client.on('voiceStateUpdate', (oldState, newState) => {
     }
 });
 
+// ==========================================
+// السر هنا: سحب الصوت بالتنكر كمتصفح كروم
+// ==========================================
 async function playCurrentSurah() {
     if (!player || !STATE.isPlaying) return;
     try {
         const paddedSurah = String(STATE.currentSurah).padStart(3, '0');
         const audioURL = `${CONFIG.DEFAULT_SERVER}${paddedSurah}.mp3`;
         
-        // الطريقة المباشرة والأكثر ضماناً لعمل الصوت في ديسكورد
-        const resource = createAudioResource(audioURL, { inlineVolume: true });
+        // التنكر كمتصفح حقيقي لتجاوز حظر السيرفر
+        const response = await fetch(audioURL, {
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                'Accept': 'audio/mpeg'
+            }
+        });
+
+        if (!response.ok) throw new Error(`السيرفر رفض إعطاء الصوت: ${response.status}`);
+
+        // تمرير الصوت النقي إلى ديسكورد
+        const resource = createAudioResource(response.body, { 
+            inputType: StreamType.Arbitrary,
+            inlineVolume: true 
+        });
         resource.volume.setVolume(0.6);
         
         player.play(resource);
@@ -156,6 +173,9 @@ async function playCurrentSurah() {
         updateControlPanel();
     } catch (error) {
         logMessage(`فشل تشغيل السورة: ${error.message}`, 'error');
+        // إذا فشلت السورة، ننتقل للتي بعدها بعد 5 ثواني
+        STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
+        setTimeout(() => { if (STATE.isPlaying) playCurrentSurah(); }, 5000);
     }
 }
 
