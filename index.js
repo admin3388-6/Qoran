@@ -7,10 +7,9 @@ const {
 const { 
     joinVoiceChannel, createAudioPlayer, createAudioResource, 
     AudioPlayerStatus, VoiceConnectionStatus, entersState, 
-    NoSubscriberBehavior, StreamType
+    NoSubscriberBehavior
 } = require('@discordjs/voice');
 const http = require('http');
-const fetch = require('node-fetch'); // المكتبة السحرية لسحب الصوت
 
 const CONFIG = {
     GUILD_ID: process.env.GUILD_ID,
@@ -141,7 +140,7 @@ client.on('voiceStateUpdate', (oldState, newState) => {
 });
 
 // ==========================================
-// السر هنا: سحب الصوت بالتنكر كمتصفح كروم
+// التعديل: إرسال الرابط مباشرة ليتم معالجته عبر ffmpeg
 // ==========================================
 async function playCurrentSurah() {
     if (!player || !STATE.isPlaying) return;
@@ -149,19 +148,8 @@ async function playCurrentSurah() {
         const paddedSurah = String(STATE.currentSurah).padStart(3, '0');
         const audioURL = `${CONFIG.DEFAULT_SERVER}${paddedSurah}.mp3`;
         
-        // التنكر كمتصفح حقيقي لتجاوز حظر السيرفر
-        const response = await fetch(audioURL, {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
-                'Accept': 'audio/mpeg'
-            }
-        });
-
-        if (!response.ok) throw new Error(`السيرفر رفض إعطاء الصوت: ${response.status}`);
-
-        // تمرير الصوت النقي إلى ديسكورد
-        const resource = createAudioResource(response.body, { 
-            inputType: StreamType.Arbitrary,
+        // تمرير الرابط المباشر لمكتبة ديسكورد ليتولى ffmpeg جلب الصوت ومعالجته بكفاءة
+        const resource = createAudioResource(audioURL, { 
             inlineVolume: true 
         });
         resource.volume.setVolume(0.6);
