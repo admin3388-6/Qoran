@@ -7,7 +7,7 @@ const {
 const { 
     joinVoiceChannel, createAudioPlayer, createAudioResource, 
     AudioPlayerStatus, VoiceConnectionStatus, entersState, 
-    NoSubscriberBehavior, StreamType 
+    NoSubscriberBehavior 
 } = require('@discordjs/voice');
 const http = require('http');
 
@@ -43,13 +43,13 @@ http.createServer((req, res) => {
 }).listen(process.env.PORT || 3000);
 
 // ==========================================
-// 3. تهيئة العميل (تم إصلاح مشكلة الذاكرة ليرى الأعضاء)
+// 3. تهيئة العميل
 // ==========================================
 const client = new Client({
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildVoiceStates],
     makeCache: Options.cacheWithLimits({
         MessageManager: 0, PresenceManager: 0, ReactionManager: 0,
-        ThreadManager: 0 // تم إزالة تقييد الأعضاء لكي يتمكن البوت من رؤيتك
+        ThreadManager: 0 
     }),
 });
 
@@ -85,7 +85,6 @@ async function connectToVoice() {
         const voiceChannel = guild?.channels.cache.get(CONFIG.VOICE_CHANNEL_ID);
         if (!voiceChannel) return logMessage('لم يتم العثور على الروم الصوتي!', 'error');
 
-        // إنشاء الاتصال
         connection = joinVoiceChannel({
             channelId: voiceChannel.id,
             guildId: guild.id,
@@ -99,22 +98,29 @@ async function connectToVoice() {
                 behaviors: { noSubscriber: NoSubscriberBehavior.Play }
             });
 
+            // هنا تم حل مشكلة التكرار السريع (Spam)
             player.on(AudioPlayerStatus.Idle, () => {
                 if (STATE.isPlaying && STATE.membersCount > 0) {
                     STATE.currentSurah = STATE.currentSurah >= 114 ? 1 : STATE.currentSurah + 1;
-                    playCurrentSurah();
+                    
+                    // نظام التبريد: انتظار ثانيتين قبل تشغيل السورة التالية لمنع التكرار الجنوني
+                    setTimeout(() => {
+                        if (STATE.isPlaying) playCurrentSurah();
+                    }, 2000);
                 }
             });
 
             player.on('error', error => {
                 logMessage(`خطأ في الصوت: ${error.message}`, 'error');
-                setTimeout(playCurrentSurah, 5000);
+                // انتظار 5 ثواني عند حدوث خطأ لمنع التكرار
+                setTimeout(() => {
+                    if (STATE.isPlaying) playCurrentSurah();
+                }, 5000);
             });
         }
 
         connection.subscribe(player);
 
-        // معالجة الانقطاع
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
             try {
                 await Promise.race([
@@ -128,8 +134,6 @@ async function connectToVoice() {
         });
 
         logMessage('✅ البوت متصل بالروم الصوتي وجاهز للعمل.');
-        
-        // فحص الروم فور الدخول لمعرفة إذا كان هناك أشخاص متواجدين مسبقاً
         checkChannelMembers(voiceChannel);
 
     } catch (error) {
@@ -139,12 +143,11 @@ async function connectToVoice() {
 }
 
 // ==========================================
-// 7. النظام الاقتصادي اللحظي (بدون تأخير)
+// 7. النظام الاقتصادي اللحظي
 // ==========================================
 function checkChannelMembers(channel) {
     if (!channel) return;
     
-    // حساب الأعضاء الحقيقيين (بدون البوتات)
     const members = channel.members.filter(m => !m.user.bot);
     const count = members.size;
 
@@ -152,24 +155,21 @@ function checkChannelMembers(channel) {
         STATE.membersCount = count;
         
         if (count > 0 && !STATE.isPlaying) {
-            logMessage(`👤 تم رصد مستمعين (${count}) - جاري بدء التلاوة فوراً...`);
+            logMessage(`👤 تم رصد مستمعين (${count}) - جاري بدء التلاوة...`);
             STATE.isPlaying = true;
             playCurrentSurah();
         } else if (count === 0 && STATE.isPlaying) {
             logMessage(`🚫 الروم فارغ - إيقاف التلاوة لتوفير الموارد.`);
-            player.stop();
-            STATE.isPlaying = false;
+            STATE.isPlaying = false; // يجب تغيير الحالة أولاً
+            if (player) player.stop(); // ثم إيقاف المشغل
             updateControlPanel();
         } else {
-            // تحديث العداد فقط في اللوحة
             updateControlPanel();
         }
     }
 }
 
-// مراقبة الدخول والخروج بشكل لحظي
 client.on('voiceStateUpdate', (oldState, newState) => {
-    // التحقق مما إذا كان التحديث يخص الروم الخاص بنا
     if (oldState.channelId === CONFIG.VOICE_CHANNEL_ID || newState.channelId === CONFIG.VOICE_CHANNEL_ID) {
         const guild = client.guilds.cache.get(CONFIG.GUILD_ID);
         const voiceChannel = guild?.channels.cache.get(CONFIG.VOICE_CHANNEL_ID);
@@ -181,7 +181,9 @@ async function playCurrentSurah() {
     if (!player || !STATE.isPlaying) return;
     try {
         const audioURL = getAudioURL(STATE.currentSurah);
-        const resource = createAudioResource(audioURL, { inputType: StreamType.Arbitrary, inlineVolume: true });
+        
+        // إزالة القيود عن نوع الصوت ليعمل بشكل طبيعي
+        const resource = createAudioResource(audioURL, { inlineVolume: true });
         resource.volume.setVolume(0.6);
         
         player.play(resource);
@@ -225,7 +227,7 @@ async function updateControlPanel() {
     try {
         await STATE.controlMessage.edit(buildPanel());
     } catch (e) {
-        STATE.controlMessage = null; 
+        // تجاهل الخطأ إذا تم مسح الرسالة
     }
 }
 
